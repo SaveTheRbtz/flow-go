@@ -73,7 +73,6 @@ type MiddlewareTestSuite struct {
 	providers []*UpdatableIDProvider
 
 	mwCancel context.CancelFunc
-	mwCtx    irrecoverable.SignalerContext
 }
 
 // TestMiddlewareTestSuit runs all the test methods in this test suit
@@ -118,20 +117,20 @@ func (m *MiddlewareTestSuite) SetupTest() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mwCancel = cancel
 	var errChan <-chan error
-	m.mwCtx, errChan = irrecoverable.WithSignaler(ctx)
+	mwCtx, errChan := irrecoverable.WithSignaler(ctx)
 
 	go func() {
 		select {
 		case err := <-errChan:
 			m.T().Error("middlewares encountered fatal error", err)
-		case <-m.mwCtx.Done():
+		case <-mwCtx.Done():
 			return
 		}
 	}()
 
 	for i, mw := range m.mws {
 		mw.SetOverlay(m.ov[i])
-		mw.Start(m.mwCtx)
+		mw.Start(mwCtx)
 		<-mw.Ready()
 	}
 
@@ -155,7 +154,8 @@ func (m *MiddlewareTestSuite) TestUpdateNodeAddresses() {
 		mock.AnythingOfType("*message.Message"),
 	).Return(nil)
 	newMw.SetOverlay(overlay)
-	newMw.Start(m.mwCtx)
+	mwCtx, _ := irrecoverable.WithSignaler(context.Background())
+	newMw.Start(mwCtx)
 
 	idList := flow.IdentityList(append(m.ids, newId))
 
@@ -425,7 +425,7 @@ func (m *MiddlewareTestSuite) TestLargeMessageSize_SendDirect() {
 	require.NoError(m.Suite.T(), err)
 
 	// check message reception on target
-	unittest.RequireCloseBefore(m.T(), ch, 15*time.Second, "source node failed to send large message to target")
+	unittest.RequireCloseBefore(m.T(), ch, 60*time.Second, "source node failed to send large message to target")
 
 	m.ov[targetIndex].AssertExpectations(m.T())
 }
