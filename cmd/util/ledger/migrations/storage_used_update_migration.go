@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/atomic"
+
 	fvm "github.com/onflow/flow-go/fvm/state"
 	"github.com/onflow/flow-go/ledger"
 	"github.com/onflow/flow-go/ledger/common/utils"
@@ -20,19 +22,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type accountPayloadSize struct {
-	Address     string
-	StorageUsed uint64
-}
-
 type indexedPayload struct {
 	Index   int
 	Payload ledger.Payload
-}
-
-type accountStorageUsedPayload struct {
-	Address string
-	Index   int
 }
 
 type StorageUsedUpdateMigration struct {
@@ -71,42 +63,13 @@ func (m *StorageUsedUpdateMigration) Migrate(payload []ledger.Payload) ([]ledger
 	}()
 
 	workerCount := runtime.NumCPU()
-
-	storageUsed := make(map[string]uint64)
-	storageUsedChan := make(chan accountPayloadSize, workerCount)
+	syncStorageUsed := sync.Map{}
+	syncStorageUsedPayload := sync.Map{}
 	payloadChan := make(chan indexedPayload, workerCount)
-	storageUsedPayloadChan := make(chan accountStorageUsedPayload, workerCount)
-	storageUsedPayload := make(map[string]int)
 
-	inputEG, ctx := errgroup.WithContext(context.Background())
-	outputWG := &sync.WaitGroup{}
-
-	outputWG.Add(1)
-	go func() {
-		defer outputWG.Done()
-		for payloadSize := range storageUsedChan {
-			if _, ok := storageUsed[payloadSize.Address]; !ok {
-				storageUsed[payloadSize.Address] = 0
-			}
-			storageUsed[payloadSize.Address] = storageUsed[payloadSize.Address] + payloadSize.StorageUsed
-		}
-	}()
-
-	outputWG.Add(1)
-	go func() {
-		defer outputWG.Done()
-		for su := range storageUsedPayloadChan {
-			if _, ok := storageUsedPayload[su.Address]; ok {
-				m.Log.Error().
-					Str("address", flow.BytesToAddress([]byte(su.Address)).Hex()).
-					Msg("Already found a storage used payload for this address. Is this a duplicate?")
-			}
-			storageUsedPayload[su.Address] = su.Index
-		}
-	}()
-
+	g, ctx := errgroup.WithContext(context.Background())
 	for i := 0; i < workerCount; i++ {
-		inputEG.Go(func() error {
+		g.Go(func() error {
 			for p := range payloadChan {
 				id, err := KeyToRegisterID(p.Payload.Key)
 				if err != nil {
@@ -118,14 +81,15 @@ func (m *StorageUsedUpdateMigration) Migrate(payload []ledger.Payload) ([]ledger
 					continue
 				}
 				if id.Key == fvm.KeyStorageUsed {
-					storageUsedPayloadChan <- accountStorageUsedPayload{
-						Address: id.Owner,
-						Index:   p.Index,
+					if _, ok := syncStorageUsedPayload.LoadOrStore(id.Owner, p.Index); ok {
+						m.Log.Error().
+							Str("address", flow.BytesToAddress([]byte(id.Owner)).Hex()).
+							Msg("Already found a storage used payload for this address. Is this a duplicate?")
 					}
 				}
-				storageUsedChan <- accountPayloadSize{
-					Address:     id.Owner,
-					StorageUsed: uint64(registerSize(id, p.Payload)),
+				used := uint64(registerSize(id, p.Payload))
+				if val, ok := syncStorageUsed.LoadOrStore(id.Owner, atomic.NewUint64(used)); ok {
+					val.(*atomic.Uint64).Add(used)
 				}
 			}
 			return nil
@@ -140,16 +104,23 @@ Loop:
 		case payloadChan <- indexedPayload{Index: i, Payload: p}:
 		}
 	}
-
 	close(payloadChan)
-	err = inputEG.Wait()
-	close(storageUsedChan)
-	close(storageUsedPayloadChan)
-	outputWG.Wait()
 
+	err = g.Wait()
 	if err != nil {
 		return nil, err
 	}
+
+	storageUsed := make(map[string]uint64)
+	syncStorageUsed.Range(func(key, value interface{}) bool {
+		storageUsed[key.(string)] = value.(*atomic.Uint64).Load()
+		return true
+	})
+	storageUsedPayload := make(map[string]int)
+	syncStorageUsedPayload.Range(func(key, value interface{}) bool {
+		storageUsedPayload[key.(string)] = value.(int)
+		return true
+	})
 
 	if len(storageUsedPayload) != len(storageUsed) {
 		errStr := "number off accounts and number of storage_used registers don't match"
