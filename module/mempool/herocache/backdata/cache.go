@@ -135,8 +135,6 @@ func NewCache(sizeLimit uint32,
 
 // Has checks if backdata already contains the entity with the given identifier.
 func (c *Cache) Has(entityID flow.Identifier) bool {
-	defer c.logTelemetry()
-
 	_, _, _, ok := c.get(entityID)
 	return ok
 }
@@ -185,23 +183,17 @@ func (c *Cache) Adjust(entityID flow.Identifier, f func(flow.Entity) flow.Entity
 
 // ByID returns the given entity from the backdata.
 func (c *Cache) ByID(entityID flow.Identifier) (flow.Entity, bool) {
-	defer c.logTelemetry()
-
 	entity, _, _, ok := c.get(entityID)
 	return entity, ok
 }
 
 // Size returns the size of the backdata, i.e., total number of stored (entityId, entity) pairs.
 func (c Cache) Size() uint {
-	defer c.logTelemetry()
-
 	return uint(c.entities.Size())
 }
 
 // All returns all entities stored in the backdata.
 func (c Cache) All() map[flow.Identifier]flow.Entity {
-	defer c.logTelemetry()
-
 	entitiesList := c.entities.All()
 	all := make(map[flow.Identifier]flow.Entity, len(c.entities.All()))
 
@@ -216,8 +208,6 @@ func (c Cache) All() map[flow.Identifier]flow.Entity {
 
 // Identifiers returns the list of identifiers of entities stored in the backdata.
 func (c Cache) Identifiers() flow.IdentifierList {
-	defer c.logTelemetry()
-
 	ids := make(flow.IdentifierList, c.entities.Size())
 	for i, p := range c.entities.All() {
 		ids[i] = p.Id()
@@ -228,8 +218,6 @@ func (c Cache) Identifiers() flow.IdentifierList {
 
 // Entities returns the list of entities stored in the backdata.
 func (c Cache) Entities() []flow.Entity {
-	defer c.logTelemetry()
-
 	entities := make([]flow.Entity, c.entities.Size())
 	for i, p := range c.entities.All() {
 		entities[i] = p.Entity()
@@ -252,8 +240,6 @@ func (c *Cache) Clear() {
 
 // Hash returns the merkle root hash of all entities.
 func (c *Cache) Hash() flow.Identifier {
-	defer c.logTelemetry()
-
 	return flow.MerkleRoot(flow.GetIDs(c.All())...)
 }
 
