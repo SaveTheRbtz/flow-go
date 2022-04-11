@@ -49,17 +49,22 @@ func (lm *LifecycleManager) OnStart(startupFns ...func()) {
 // starting up, we will wait for startup to complete before shutting down. After the first
 // call, subsequent calls to OnStop do nothing.
 func (lm *LifecycleManager) OnStop(shutdownFns ...func()) {
+	var waitForStartup bool
+
 	lm.stateTransition.Lock()
 	if lm.shutdownCommenced {
 		lm.stateTransition.Unlock()
 		return
 	}
 	lm.shutdownCommenced = true
+	if lm.startupCommenced {
+		waitForStartup = true
+	}
 	lm.stateTransition.Unlock()
 
 	close(lm.shutdownSignal)
 	go func() {
-		if lm.startupCommenced {
+		if waitForStartup {
 			<-lm.started
 			for _, fn := range shutdownFns {
 				fn()
